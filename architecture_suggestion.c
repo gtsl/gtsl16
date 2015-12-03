@@ -55,7 +55,7 @@ uint16_t schedule_counter = 0;
 int scheduler();
 
 //int poll_sensors(float *altitude, float *acceleration,
-	bool *altitude_updated, bool *acceleration_updated);
+//	bool *altitude_updated, bool *acceleration_updated);
 
 int state_estimate(float altitude, float *acceleration,
 	bool altitude_updated, bool acceleration_updated,
@@ -158,21 +158,21 @@ int init()
 	return 0;
 }
 
-int poll_sensors(float *altitude, float *acceleration,
-	bool *altitude_updated, bool *acceleration_updated)
-{
-	/* Logic here */
-	*altitude = 0; /* Setting the value that the pointer is pointing to */
-	acceleration[0] = 0;
-	acceleration[1] = 0;
-	acceleration[2] = 9.81;
-
-	*altitude_updated = true; /* If the sensor had new data, do this */
-	*acceleration_updated = true;
-	printf("poll_sensors\n");
-	/* Successful return */
-	return 0;
-}
+//int poll_sensors(float *altitude, float *acceleration,
+//	bool *altitude_updated, bool *acceleration_updated)
+//{
+//	/* Logic here */
+//	*altitude = 0; /* Setting the value that the pointer is pointing to */
+//	acceleration[0] = 0;
+//	acceleration[1] = 0;
+//	acceleration[2] = 9.81;
+//
+//	*altitude_updated = true; /* If the sensor had new data, do this */
+//	*acceleration_updated = true;
+//	printf("poll_sensors\n");
+//      /* Successful return */
+//	return 0;
+//}
 
 int state_estimate(float altitude, float *acceleration,
 	bool altitude_updated, bool acceleration_updated,
