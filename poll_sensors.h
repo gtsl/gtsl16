@@ -64,7 +64,7 @@ void poll sensors(int *altitude, double *acceleration, bool *altitude_updated, b
 	     // Change altitude value & report that it has been updated
 	     if(altitude_sensor != *altitude){
 		&altitude = altitude_sensor;
-		*altitude_update = true;
+		*altitude_updated = true;
 		}	
 
 	      acc.readXYZGravity(&x,&y,&z);
