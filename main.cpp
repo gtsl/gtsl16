@@ -12,11 +12,11 @@
 #include <cmath>
 #include <string.h>         /* memset */
 #include "tables.h"
-#include "intheloop.h"
 #include "mbed.h"
 #include <MMA8452.h>
 #include <uLCD_4DGL.h>
 #include "Servo.h"
+#include "intheloop.h"
 
 /* ****************************************************************************/
 /* Prototypes */
@@ -33,7 +33,6 @@ void matSum(int row,  int column, float **mat1, float **mat2,
 
 /* General functions */
 int init();
-void check_accel_direction();
 int scheduler();
 void state_estimate(float h_meas_m, float h_prev_meas_m, float a_meas_ms2,
     float dt_meas_s, float *h_est_m, float *v_est_ms);
@@ -53,13 +52,6 @@ float poll_acc(uint8_t axis, uint8_t is_flip);
 /* Actuator functions */
 void actuator(int control);
 
-/* Hardware in the loop functions */
-#if (!IS_FLIGHT)
-int get_index_time_sim(float time1);
-float get_h_sim(float time1);
-float get_a_sim(float time1);
-#endif
-
 /* ****************************************************************************/
 /* Definitions */
 
@@ -72,7 +64,7 @@ float get_a_sim(float time1);
 /**
  * \def Flag set to true for flight. Else for ground debug.
  */
-#define IS_FLIGHT				(1)
+#define IS_FLIGHT				(0)
 
 #define POLL_SENSOR_RATE        (1)
 #define STATE_ESTIMATE_RATE     (1)
@@ -80,7 +72,7 @@ float get_a_sim(float time1);
 
 #define LAUNCH_DETECT_ACCEL_MS2 (2 * 9.81)
 #define LAUNCH_DETECT_COUNT     (10)
-#define ACCEL_AXIS              (3)
+#define ACCEL_AXIS              (2)
 #define IS_ACCEL_FLIP			(0)		/* True if flip sign of accel values */
 #define IS_ACCEL_CONNECTED		(1)
 
@@ -92,6 +84,12 @@ float get_a_sim(float time1);
 #define VP_CONV_TO_MS			(1 / 1000.0 * 1609.34)
 #define AP_CONV_TO_MS2			(1)
 
+/* Hardware in the loop functions */
+#if (!IS_FLIGHT)
+int get_index_time_sim(float time1);
+float get_h_sim(float time1);
+float get_a_sim(float time1);
+#endif
 
 /* ****************************************************************************/
 /* Variables */
@@ -247,22 +245,6 @@ int init()
 }
 
 /**
- * Check values of the accelerometer on the pad. Stop program if the
- * accelerometer is in the wrong orientation
- */
-void check_accel_direction()
-{
-	/* Read the accelerometer */
-	float a = poll_acc(ACCEL_AXIS, IS_ACCEL_FLIP);
-
-	/* On the pad there should be a positive acceleration */
-	if (a < 0) {
-		pc.printf("Accelerometer is flipped. Change IS_ACCEL_FLIP constant\
-			in flight software. Stopping program.\n");
-		while(1);
-	}
-}
-/**
  * Main program scheduler
  * 
  * @return -1 on failure
@@ -309,10 +291,11 @@ int scheduler()
                 &h_est_m, &v_est_ms);
         }
         if (!(schedule_counter % CONROLLER_RATE)) {
-            float t_flt_s = main_timer.read() - t_launch_s; 
-            int control = controller(h_est_m, v_est_ms, t_flt_s);
-            actuator(control);
-
+            float t_flt_s = main_timer.read() - t_launch_s;
+            // if (t_flt_s > 2.5) {
+	            int control = controller(h_est_m, v_est_ms, t_flt_s);
+	            actuator(control);
+        	// }
             if (led1_dev == 1) led1_dev = 0; else led1_dev = 1;
         }
         schedule_counter++;
