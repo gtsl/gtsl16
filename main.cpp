@@ -12,6 +12,7 @@
 #include <cmath>
 #include <string.h>         /* memset */
 #include "tables.h"
+#include "intheloop.h"
 #include "mbed.h"
 #include <MMA8452.h>
 #include <uLCD_4DGL.h>
@@ -32,6 +33,7 @@ void matSum(int row,  int column, float **mat1, float **mat2,
 
 /* General functions */
 int init();
+void check_accel_direction();
 int scheduler();
 void state_estimate(float h_meas_m, float h_prev_meas_m, float a_meas_ms2,
     float dt_meas_s, float *h_est_m, float *v_est_ms);
@@ -46,10 +48,17 @@ float get_ap(float time);
 
 /* Sensor functions */
 float poll_alt();
-float poll_acc(uint8_t axis);
+float poll_acc(uint8_t axis, uint8_t is_flip);
 
 /* Actuator functions */
 void actuator(int control);
+
+/* Hardware in the loop functions */
+#if (!IS_FLIGHT)
+int get_index_time_sim(float time1);
+float get_h_sim(float time1);
+float get_a_sim(float time1);
+#endif
 
 /* ****************************************************************************/
 /* Definitions */
@@ -63,25 +72,26 @@ void actuator(int control);
 /**
  * \def Flag set to true for flight. Else for ground debug.
  */
-#define IS_FLIGHT				0
+#define IS_FLIGHT				(1)
 
-#define POLL_SENSOR_RATE        5
-#define STATE_ESTIMATE_RATE     1
-#define CONROLLER_RATE          100
+#define POLL_SENSOR_RATE        (1)
+#define STATE_ESTIMATE_RATE     (1)
+#define CONROLLER_RATE          (10)
 
-#define LAUNCH_DETECT_ACCEL_G   2
-#define LAUNCH_DETECT_COUNT     10 
-#define ACCEL_AXIS              2
+#define LAUNCH_DETECT_ACCEL_MS2 (2 * 9.81)
+#define LAUNCH_DETECT_COUNT     (10)
+#define ACCEL_AXIS              (3)
+#define IS_ACCEL_FLIP			(0)		/* True if flip sign of accel values */
+#define IS_ACCEL_CONNECTED		(1)
 
-#define ALT_SIM_NOISE_MAG		10
-#define ACCEL_SIM_NOISE_MAG		10
+#define ALT_SIM_NOISE_MAG		(10)
+#define ACCEL_SIM_NOISE_MAG		(10)
 
 /* Conversions for table lookup values */
 #define HP_CONV_TO_M			(1 / 1000.0 * 1609.34) 		/* mi*1000 -> m */
 #define VP_CONV_TO_MS			(1 / 1000.0 * 1609.34)
-#define AP_CONV_TO_MS2			1
+#define AP_CONV_TO_MS2			(1)
 
-#define IS_ACCEL_CONNECTED		0
 
 /* ****************************************************************************/
 /* Variables */
@@ -96,19 +106,22 @@ float Spo;
 float t_launch_s;                   /* Time of launch in seconds */
 Timer main_timer;
 
+#if (!IS_FLIGHT)
+Timer hil_timer;					/* Timer for hardware in the loop ops */
+#endif
+
 /* Physical devices */
 Serial pc(USBTX,USBRX);
 Serial alt_dev(p13,p14);            /* Altimeter (tx, rx) */ 
 #if(IS_ACCEL_CONNECTED)
-MMA8452 acc_dev(p9, p10, 100000);  /* Accelerometer */ //9&10
+MMA8452 acc_dev(p9, p10, 100000);  	/* Accelerometer */ //9&10
 #endif
-Servo servo_dev(p21);               /* Servo motor */ //21-24
+Servo servo_dev_1(p21);             /* Servo motor */ //21-24
 Servo servo_dev_2(p22);
 Servo servo_dev_3(p23);
 Servo servo_dev_4(p24);
 DigitalOut led1_dev(LED1);
 
-//int servo_dev = 1; // Fix when using servo
 //KALMAN FILTER VARIABLES
 float **P_Kalman = new float*[2];
 float ** R_Kalman = new float*[2];
@@ -137,6 +150,11 @@ int unpwr_asc = 0;
 
 int main()
 {
+	/* Record program start for hardware in the loop */
+	#if (!IS_FLIGHT)
+	hil_timer.start();
+	#endif
+
     pc.printf("Hello world!\n");
     /* Initalize system */
     if (init() < 0) {
@@ -149,9 +167,8 @@ int main()
 
     while (true) {
 
-        //a_meas_ms2 = poll_acc(ACCEL_AXIS);
-        a_meas_ms2 = 3;
-        if (a_meas_ms2 >= LAUNCH_DETECT_ACCEL_G) {
+        a_meas_ms2 = poll_acc(ACCEL_AXIS, IS_ACCEL_FLIP);
+        if (a_meas_ms2 >= LAUNCH_DETECT_ACCEL_MS2) {
             /* Read launch time if this is the first trigger signal */
             if (!launch_detect_counter)
                 t_launch_s = main_timer.read();
@@ -186,6 +203,9 @@ int init()
     /* Start timer */
     main_timer.start();
     
+    /* Retract ATS */
+    actuator(0);
+
     /* KALMAN FILTER VARIABLES */
     for (int i=0;i<2;i++) {
          P_Kalman[i] = new float[2];  //ADDED BY DD.
@@ -227,13 +247,28 @@ int init()
 }
 
 /**
+ * Check values of the accelerometer on the pad. Stop program if the
+ * accelerometer is in the wrong orientation
+ */
+void check_accel_direction()
+{
+	/* Read the accelerometer */
+	float a = poll_acc(ACCEL_AXIS, IS_ACCEL_FLIP);
+
+	/* On the pad there should be a positive acceleration */
+	if (a < 0) {
+		pc.printf("Accelerometer is flipped. Change IS_ACCEL_FLIP constant\
+			in flight software. Stopping program.\n");
+		while(1);
+	}
+}
+/**
  * Main program scheduler
  * 
  * @return -1 on failure
  */
 int scheduler()
 {
-    pc.printf("In scheduler\n");
     uint16_t schedule_counter = 0;
 
     /* Sensor measurements */
@@ -265,10 +300,11 @@ int scheduler()
                 meas_timer.reset();
             }
 
-            float new_a_ms2 = poll_acc(ACCEL_AXIS);
+            float new_a_ms2 = poll_acc(ACCEL_AXIS, IS_ACCEL_FLIP);
             if (new_a_ms2 > 0) a_meas_ms2 = new_a_ms2;
         }
         if (!(schedule_counter % STATE_ESTIMATE_RATE)) {
+        	if (dt_meas_s)
             state_estimate(h_meas_m, h_prev_meas_m, a_meas_ms2, dt_meas_s,
                 &h_est_m, &v_est_ms);
         }
@@ -280,6 +316,7 @@ int scheduler()
             if (led1_dev == 1) led1_dev = 0; else led1_dev = 1;
         }
         schedule_counter++;
+        wait_ms(100);
     }
     return 0;
 }
@@ -295,7 +332,7 @@ int scheduler()
  */
 float poll_alt()
 {
-	pc.printf("poll_al\n");
+	pc.printf("poll_alt...");
     char a;
     const char lf = 0x0A;       /* Line feed character */
     uint8_t is_h_update = 0;    /* True if new altitude value returned */
@@ -339,39 +376,17 @@ float poll_alt()
     pc.printf("not readable\n");
     return -1;
 }
-#else /* ! IS_FLIGHT */
 
-/**
- * Mimic polling of altimeter through table lookup
- *
- * NOTE Function uses the main_timer and t_launch_s to get a flight time for
- * use in table lookup
- * @return Altitude in meters
- */
-float poll_alt()
-{
-	/* Get time into flight in seconds */
-	float t_flt_s = main_timer.read() - t_launch_s;
-	/* Lookup nominal trajectory altitude for given time */
-	int h_lookup_m = get_hp(t_flt_s); /* TODO check get_hp */
-	/* Add noise */
-	float noise = ((float)rand()/(float)(RAND_MAX) * ALT_SIM_NOISE_MAG / 2)
-	 - ALT_SIM_NOISE_MAG;
-	float h_fake_m = h_lookup_m + noise;
-	return h_fake_m;
-}
-
-#endif
-
-#if(IS_FLIGHT)
 /**
  * Poll accelerometer. Return acceleration in m/s2
  * 
  * @param axis The axis of acceleration of interest. x:1 y:2 z:3
+ * @param is_flip 0 if not change sign of value, else change
  * @return Absolute value of acceleration in m/s2 
  */
-float poll_acc(uint8_t axis)
+float poll_acc(uint8_t axis, uint8_t is_flip)
 {
+	pc.printf("poll_acc...");
     double x, y, z, new_a_ms2;
 
     #if(IS_ACCEL_CONNECTED)
@@ -395,32 +410,51 @@ float poll_acc(uint8_t axis)
             break;
     }
 
-    return abs(new_a_ms2);
+    float new_a_ms2_flip = is_flip ? -new_a_ms2 : new_a_ms2;
+    pc.printf("%f\n", new_a_ms2_flip);
+    return new_a_ms2_flip;
 }
 
-#else
+#else /* ! IS_FLIGHT ( GROUND TEST )*/
 
 /**
- * mimic polling of accelerometer through table lookup
+ * GROUND TEST ONLY
+ * Mimic polling of altimeter through table lookup 
+ *
+ * NOTE Function uses the main_timer and t_launch_s to get a flight time for
+ * use in table lookup
+ * @return Altitude in meters
+ */
+float poll_alt()
+{
+	/* Get time into program in seconds */
+	float t_prog_s = hil_timer.read();
+	/* Lookup simulated trajectory altitude (with noise) for given time */
+	float h_lookup_m = get_h_sim(t_prog_s);
+	pc.printf("poll alt...h: %f \n" , h_lookup_m);
+	return h_lookup_m;
+}
+
+/**
+ * GROUND TEST ONLY
+ * Mimic polling of accelerometer through table lookup
  *
  * NOTE Function uses main_timer and t_launch_s to get time into flight for
  * table lookup
  * @param  axis The axis of acceleration of interest. x:1 y:2 z:3
  * @return Absolute value of acceleration in m/s2 
  */
-float poll_acc(uint8_t axis)
+float poll_acc(uint8_t axis, uint8_t is_flip)
 {
-	/* Get time into flight in seconds */
-	float t_flt_s = main_timer.read() - t_launch_s;
-	/* Table lookup */
-	int a_lookup_ms2 = get_ap(t_flt_s);
-	/* Add noise */
-	float noise = ((float)rand()/(float)(RAND_MAX) * ACCEL_SIM_NOISE_MAG / 2)
-	 - ACCEL_SIM_NOISE_MAG;
-	float a_fake_ms2 = a_lookup_ms2 + noise;
-	return a_fake_ms2;
+	/* Get time into program in seconds */
+	float t_prog_s = hil_timer.read();
+	/* Lookup simulated trajectory acceleration (with noise) for given time */
+	float a_lookup_ms2 = get_a_sim(t_prog_s);
+	pc.printf("a: %f\n", a_lookup_ms2);
+	return a_lookup_ms2;
 }
 #endif
+
 /**
  * Kalman filter state estimator
  *
@@ -444,7 +478,6 @@ float poll_acc(uint8_t axis)
 void state_estimate(float h_meas_m, float h_prev_meas_m, float a_meas_ms2,
     float dt_meas_s, float *h_est_m, float *v_est_ms)
 {
-	pc.printf("kf...");
     //pc.printf("state_estimate\n");
 
     /* KALMAN ALGORITHM: (for reference)
@@ -465,6 +498,8 @@ void state_estimate(float h_meas_m, float h_prev_meas_m, float a_meas_ms2,
     /* Estimate the velocity from change in altitude */
     float v_meas_ms = (h_meas_m - h_prev_meas_m) / dt_meas_s;
 
+	pc.printf("kf...meas: dt %f; %f, %f...", dt_meas_s, h_meas_m, v_meas_ms);
+
     /* Populate the state matrix with measurements */
     xvec_est[0][0] = h_meas_m;
     xvec_est[1][0] = v_meas_ms;
@@ -473,7 +508,7 @@ void state_estimate(float h_meas_m, float h_prev_meas_m, float a_meas_ms2,
     matMultiplication(2, 2, A, 2, 1, xvec_est, temp5);
     matScaleMultiplication(2, 1, B, a_meas_ms2, temp6);
     matSum(2, 1, temp5, temp6, x_minus);
-    
+
     matMultiplication(2, 2, A, 2, 2, P_Kalman, temp1);
     transpose(2, 2, A, Atr);
     matMultiplication(2, 2, temp1, 2, 2, Atr, temp2);
@@ -502,7 +537,7 @@ void state_estimate(float h_meas_m, float h_prev_meas_m, float a_meas_ms2,
     matScaleMultiplication(2, 2, K, -1, temp4);
     matSum(2, 2, temp3, temp4, temp1);
     matMultiplication(2, 2, temp1, 2, 2, P_minus, P_Kalman);
-    pc.printf("done\n");
+    pc.printf("est: %f, %f\n", *h_est_m, *v_est_ms);
 }
 
 /* ****************************************************************************/
@@ -570,7 +605,7 @@ float get_hp(float time)
 	int hp = table_hp[get_index_time(time)];
     /* Convert to meters */
     float hp_m = HP_CONV_TO_M * hp;
-    return hp_m
+    return hp_m;
 }
 
 /**
@@ -586,15 +621,53 @@ float get_vp(float time)
     return vp_ms;
 }
 
+#if (!IS_FLIGHT)
+
 /**
- * Acceleration from nominal talbe lookup
- * @param  time Time from lift off in seconds
+ * GROUND TEST ONLY
+ * Get index in lookup tables for a time after program start
+ * @param  time Time from program start in seconds
+ * @return      Index in lookup tables for hardware in loop tables
+ */
+int get_index_time_sim(float time1)
+{
+    int i = 0;
+    if (time1 > 19)
+        return 50;
+    else {
+        while (time_100_sim[i] / 100.0 < time1)
+            i++;
+        return i - 1;
+    }
+}
+
+/**
+ * GROUND TEST ONLY
+ * Altitude from simulation lookup table
+ * @param  time Time from program start
+ * @return      Altitude in meters
+ */
+float get_h_sim(float time1)
+{
+	int16_t h_sim = table_h_sim[get_index_time_sim(time1)];
+	float h_sim_m = HP_CONV_TO_M * h_sim;
+	return h_sim_m;
+}
+
+/**
+ * GROUND TEST ONLY
+ * Acceleration from simulation talbe lookup
+ * @param  time Time from program start
  * @return      Acceleration in m/s2
  */
-float get_ap(float time)
+float get_a_sim(float time1)
 {
-	// TODO
+	int16_t a_sim = table_a_sim[get_index_time_sim(time1)];
+	float a_sim_ms2 = a_sim / 100.0;
+	return a_sim_ms2;
 }
+
+#endif
 
 /**
  * Command servo motors
@@ -604,12 +677,12 @@ void actuator(int control)
 {
     //pc.printf("actuator\n");
     if(control == 1) {
-		servo_dev = 0;
+		servo_dev_1 = 0;
 		servo_dev_2 = 0;
 		servo_dev_3 = 0;
 		servo_dev_4 = 0;
     } else {
-		servo_dev = 1;
+		servo_dev_1 = 1;
 		servo_dev_2 = 1;
 		servo_dev_3 = 1;
 		servo_dev_4 = 1;

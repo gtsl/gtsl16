@@ -1,4 +1,4 @@
-main.o: main.cpp tables.h mbed/mbed.h mbed/platform.h \
+main.o: main.cpp tables.h intheloop.h mbed/mbed.h mbed/platform.h \
  mbed/TARGET_LPC1768/TARGET_NXP/TARGET_LPC176X/TARGET_MBED_LPC1768/device.h \
  mbed/TARGET_LPC1768/TARGET_NXP/TARGET_LPC176X/objects.h \
  mbed/TARGET_LPC1768/cmsis.h mbed/TARGET_LPC1768/LPC17xx.h \
@@ -28,6 +28,8 @@ main.o: main.cpp tables.h mbed/mbed.h mbed/platform.h \
  mbed/rtc_time.h MMA8452/MMA8452.h 4DGL-uLCD-SE/uLCD_4DGL.h Servo/Servo.h
 
 tables.h:
+
+intheloop.h:
 
 mbed/mbed.h:
 
