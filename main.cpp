@@ -64,7 +64,7 @@ void actuator(int control);
 /**
  * \def Flag set to true for flight. Else for ground debug.
  */
-#define IS_FLIGHT				(0)
+#define IS_FLIGHT				(1)
 
 #define POLL_SENSOR_RATE        (1)
 #define STATE_ESTIMATE_RATE     (1)
@@ -292,14 +292,18 @@ int scheduler()
         }
         if (!(schedule_counter % CONROLLER_RATE)) {
             float t_flt_s = main_timer.read() - t_launch_s;
-            // if (t_flt_s > 2.5) {
+            if (t_flt_s > 2.5) {
 	            int control = controller(h_est_m, v_est_ms, t_flt_s);
 	            actuator(control);
-        	// }
+        	}
             if (led1_dev == 1) led1_dev = 0; else led1_dev = 1;
         }
+        if ((main_timer.read() - t_launch_s) > 20) {
+        	actuator(0);
+        	while (1);
+        }
         schedule_counter++;
-        wait_ms(100);
+        wait_ms(10);
     }
     return 0;
 }
